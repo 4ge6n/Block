@@ -1,61 +1,30 @@
-name: Update 280blocker Filter
+- name: Fetch via Cloudflare Worker (root-first)
+  run: |
+    set -e
+    BASE="https://block.shigelon.workers.dev"
+    OK=""
 
-on:
-  schedule:
-    # 毎日 10:00 JST（= 01:00 UTC）
-    - cron: '0 1 * * *'
-  workflow_dispatch:
+    try_fetch () {
+      URL="$1"
+      echo "GET $URL"
+      STATUS=$(curl -sS -w "%{http_code}" -o adguard.txt "$URL")
+      echo "status=$STATUS"
+      if [ "$STATUS" = "200" ] && [ -s adguard.txt ] && [ $(wc -c < adguard.txt) -ge 200 ]; then
+        OK=1
+      fi
+    }
 
-permissions:
-  contents: write
+    # 1) まず ルート?nocache=1
+    try_fetch "${BASE}/?nocache=1"
+    # 2) ダメなら ルート
+    if [ -z "$OK" ]; then try_fetch "${BASE}/"; fi
+    # 3) それでもダメなら /latest?nocache=1
+    if [ -z "$OK" ]; then try_fetch "${BASE}/latest?nocache=1"; fi
+    # 4) 最後に /latest
+    if [ -z "$OK" ]; then try_fetch "${BASE}/latest"; fi
 
-jobs:
-  update-filter:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Fetch via Cloudflare Worker (retry + fallback)
-        run: |
-          set -e
-          BASE="https://block.shigelon.workers.dev/latest"
-          OK=""
-          # まず nocache で最大3回トライ（生取得）
-          for i in 1 2 3; do
-            STATUS=$(curl -sS -w "%{http_code}" -o adguard.txt "${BASE}?nocache=1&try=${i}")
-            echo "status(nocache try ${i})=${STATUS}"
-            if [ "${STATUS}" = "200" ] && [ -s adguard.txt ]; then
-              OK=1; break
-            fi
-            sleep 5
-          done
-          # ダメならキャッシュ付きでフォールバック
-          if [ -z "${OK}" ]; then
-            echo "nocache failed; trying cached URL..."
-            STATUS=$(curl -sS -w "%{http_code}" -o adguard.txt "${BASE}")
-            echo "status(cached)=${STATUS}"
-            if [ "${STATUS}" != "200" ] || [ ! -s adguard.txt ]; then
-              echo "=== Worker response body (cached attempt) ==="
-              curl -sS "${BASE}" || true
-              exit 1
-            fi
-          fi
-
-      - name: Check for changes
-        id: diff
-        run: |
-          if [[ -n "$(git status --porcelain adguard.txt)" ]]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Commit and push
-        if: steps.diff.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add adguard.txt
-          git commit -m "Update 280blocker filter (via CF Worker)"
-          git push
+    if [ -z "$OK" ]; then
+      echo "=== Last response body ==="
+      curl -sS "${BASE}/" || true
+      exit 1
+    fi
