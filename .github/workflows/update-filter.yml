@@ -2,7 +2,8 @@ name: Update 280blocker Filter
 
 on:
   schedule:
-    - cron: '0 1 * * *'   # 毎日 JST 10:00
+    # 毎日 10:00 JST（= 01:00 UTC）
+    - cron: '0 1 * * *'
   workflow_dispatch:
 
 permissions:
@@ -15,9 +16,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch via Cloudflare Worker
+      - name: Fetch via Cloudflare Worker (nocache)
         run: |
-          curl -fsSL "https://block.shigelon.workers.dev/latest?run=${{ github.run_id }}" -o adguard.txt
+          # たまの一時的な 5xx に備えてリトライを入れる
+          curl -fsSL --retry 3 --retry-all-errors \
+            "https://block.shigelon.workers.dev/latest?nocache=1" \
+            -o adguard.txt
 
       - name: Check for changes
         id: diff
@@ -34,5 +38,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add adguard.txt
-          git commit -m "Update 280blocker filter (via Cloudflare Worker)"
+          git commit -m "Update 280blocker filter (via CF Worker, nocache)"
           git push
