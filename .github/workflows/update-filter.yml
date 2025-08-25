@@ -16,12 +16,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch via Cloudflare Worker (nocache)
+      - name: Fetch via Cloudflare Worker (retry + fallback)
         run: |
-          # たまの一時的な 5xx に備えてリトライを入れる
-          curl -fsSL --retry 3 --retry-all-errors \
-            "https://block.shigelon.workers.dev/latest?nocache=1" \
-            -o adguard.txt
+          set -e
+          BASE="https://block.shigelon.workers.dev/latest"
+          OK=""
+          # まず nocache で最大3回トライ（生取得）
+          for i in 1 2 3; do
+            STATUS=$(curl -sS -w "%{http_code}" -o adguard.txt "${BASE}?nocache=1&try=${i}")
+            echo "status(nocache try ${i})=${STATUS}"
+            if [ "${STATUS}" = "200" ] && [ -s adguard.txt ]; then
+              OK=1; break
+            fi
+            sleep 5
+          done
+          # ダメならキャッシュ付きでフォールバック
+          if [ -z "${OK}" ]; then
+            echo "nocache failed; trying cached URL..."
+            STATUS=$(curl -sS -w "%{http_code}" -o adguard.txt "${BASE}")
+            echo "status(cached)=${STATUS}"
+            if [ "${STATUS}" != "200" ] || [ ! -s adguard.txt ]; then
+              echo "=== Worker response body (cached attempt) ==="
+              curl -sS "${BASE}" || true
+              exit 1
+            fi
+          fi
 
       - name: Check for changes
         id: diff
@@ -38,5 +57,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add adguard.txt
-          git commit -m "Update 280blocker filter (via CF Worker, nocache)"
+          git commit -m "Update 280blocker filter (via CF Worker)"
           git push
